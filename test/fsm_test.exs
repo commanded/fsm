@@ -62,8 +62,7 @@ defmodule FsmTest do
 
   test "private" do
     assert_raise(UndefinedFunctionError, fn ->
-      PrivateFsm.new()
-      |> PrivateFsm.run()
+      apply(PrivateFsm, :run, [PrivateFsm.new()])
     end)
 
     assert(

@@ -14,14 +14,21 @@ defmodule Fsm do
       def state(%__MODULE__{state: state}), do: state
       def data(%__MODULE__{data: data}), do: data
 
-      # We need to suppress dialyzer warning, since in the second clause might
-      # never match. This can happen if every single event handler uses `Fsm`
-      # functions to explicitly set the next state.
+      # The fallback clause might never match if every event handler uses `Fsm`
+      # functions to explicitly set the next state, so we suppress the
+      # dialyzer warning and mark the case as generated to silence the
+      # compiler's type checker.
       @dialyzer {:no_match, change_state: 2}
-      defp change_state(%__MODULE__{} = fsm, {:action_responses, responses}),
-        do: parse_action_responses(fsm, responses)
-
-      defp change_state(%__MODULE__{} = fsm, _), do: fsm
+      defp change_state(%__MODULE__{} = fsm, result) do
+        unquote(
+          quote generated: true do
+            case result do
+              {:action_responses, responses} -> parse_action_responses(fsm, responses)
+              _ -> fsm
+            end
+          end
+        )
+      end
 
       defp parse_action_responses(fsm, responses) do
         Enum.reduce(responses, fsm, fn response, fsm ->
@@ -29,11 +36,11 @@ defmodule Fsm do
         end)
       end
 
-      defp handle_action_response(fsm, {:next_state, next_state}) do
+      defp handle_action_response(%__MODULE__{} = fsm, {:next_state, next_state}) do
         %__MODULE__{fsm | state: next_state}
       end
 
-      defp handle_action_response(fsm, {:new_data, new_data}) do
+      defp handle_action_response(%__MODULE__{} = fsm, {:new_data, new_data}) do
         %__MODULE__{fsm | data: new_data}
       end
 
@@ -168,6 +175,13 @@ defmodule Fsm do
     end
   end
 
+  # Builds `left = right`, dropping whichever side is a bare `_` to avoid
+  # generating redundant `_ = _` matches.
+  @doc false
+  def __match__({:_, _, ctx}, right) when is_atom(ctx), do: right
+  def __match__(left, {:_, _, ctx}) when is_atom(ctx), do: left
+  def __match__(left, right), do: quote(do: unquote(left) = unquote(right))
+
   defp implement_transition do
     quote bind_quoted: [] do
       transition_args = [
@@ -183,12 +197,8 @@ defmodule Fsm do
             %__MODULE__{state: unquote(state_arg), data: unquote(data_arg)} = fsm
           end
         end,
-        quote do
-          unquote(if event_name == :_, do: quote(do: _), else: event_name) = unquote(event_arg)
-        end,
-        quote do
-          unquote(if event_name == :_, do: quote(do: _), else: args) = unquote(args_arg)
-        end
+        Fsm.__match__(if(event_name == :_, do: quote(do: _), else: event_name), event_arg),
+        Fsm.__match__(if(event_name == :_, do: quote(do: _), else: args), args_arg)
       ]
 
       body = quote(do: change_state(fsm, unquote(event_def)))
